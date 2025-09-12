@@ -361,6 +361,7 @@ def main():
     use_pkl = False
 
     n_shooting = (50, 50, 50)
+    n_shooting = (10, 10, 10)
 
     for num in range(100,102):    #range(576):
 
@@ -398,11 +399,15 @@ def main():
 
             qs = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['q']
             qdots = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['qdot']
+            taus = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['tau']
+
             for i in range(1, len(sol.decision_states(to_merge=[SolutionMerge.NODES]))):
                 qs = np.hstack((qs, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['q']))
                 qdots = np.hstack((qdots, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['qdot']))
+                taus = np.hstack((taus, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['tau']))
 
-            taus = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['tau']
+            #taus = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['tau']
+            taudots = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['taudot']
             time = sol.stepwise_time(to_merge=[SolutionMerge.NODES, SolutionMerge.PHASES]).T[0]
 
             for i in range(1, len(sol.decision_controls(to_merge=[SolutionMerge.NODES]))):
@@ -410,7 +415,7 @@ def main():
 
             # # --- Save the solution --- #
             with open(os.path.join(RESULTS_DIR, f"athlete{num}_base.pkl"), "wb") as file:
-                data = {"q": qs, "qdot": qdots, "tau": taus, "time": time, }
+                data = {"q": qs, "qdot": qdots, "tau": taus, "taudot": taudots, "time": time, }
                 pickle.dump(data, file)
 
             print("initial solution saved")
@@ -424,6 +429,7 @@ def main():
         qs = prev_sol_data["q"]
         qdots = prev_sol_data["qdot"]
         taus = prev_sol_data["tau"]
+        taudots = prev_sol_data["taudots"]
 
         # Create the initial solution (warm start)
         ns = np.array(n_shooting)
@@ -436,7 +442,9 @@ def main():
         for p, (sa, sb, ua, ub) in enumerate(zip(S_state[:-1], S_state[1:], S_ctrl[:-1], S_ctrl[1:])):
             x_init.add("q", qs[:, sa:sb], InterpolationType.EACH_FRAME, phase=p)
             x_init.add("qdot", qdots[:, sa:sb], InterpolationType.EACH_FRAME, phase=p)
-            u_init.add("tau", taus[:, ua:ub], InterpolationType.EACH_FRAME, phase=p)
+            x_init.add("tau", taus[:, sa:sb], InterpolationType.EACH_FRAME, phase=p)
+
+            u_init.add("taudot", taudots[:, ua:ub], InterpolationType.EACH_FRAME, phase=p)
 
 
         for mode in ['anteversion', 'retroversion']:
@@ -462,19 +470,22 @@ def main():
 
                 qs = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['q']
                 qdots = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['qdot']
+                taus = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['tau']
+
                 for i in range(1, len(sol.decision_states(to_merge=[SolutionMerge.NODES]))):
                     qs = np.hstack((qs, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['q']))
                     qdots = np.hstack((qdots, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['qdot']))
+                    taus = np.hstack((taus, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['taus']))
 
-                taus = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['tau']
+                taudots = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['taudot']
                 for i in range(1, len(sol.decision_controls(to_merge=[SolutionMerge.NODES]))):
-                    taus = np.hstack((taus, sol.decision_controls(to_merge=[SolutionMerge.NODES])[i]['tau']))
+                    taudots = np.hstack((taudots, sol.decision_controls(to_merge=[SolutionMerge.NODES])[i]['taudot']))
 
                 time = sol.stepwise_time(to_merge=[SolutionMerge.NODES, SolutionMerge.PHASES]).T[0]
 
                 # # --- Save the solution --- #
                 with open(os.path.join(RESULTS_DIR, f"athlete{num}_complet_{mode}.pkl"), "wb") as file:
-                    data = {"q": qs, "qdot": qdots, "tau": taus, "time": time, }
+                    data = {"q": qs, "qdot": qdots, "tau": taus, "taudot": taudots, "time": time, }
                     pickle.dump(data, file)
 
                     print("data of full solution saved")
@@ -482,7 +493,7 @@ def main():
 
                 # --- Show the results graph --- #
                 sol.print_cost()
-                sol.graphs(show_bounds=True, show_now=True)
+                #sol.graphs(show_bounds=True, show_now=True)
 
                 with open(os.path.join(RESULTS_DIR, f"Sol_athlete{num}_complet_{mode}.pkl"), "wb") as file:
                     del sol.ocp
