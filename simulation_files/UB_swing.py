@@ -31,6 +31,7 @@ from bioptim import (
     DynamicsOptionsList,
     DynamicsOptions,
     TorqueBiorbdModel,
+    TorqueDerivativeBiorbdModel,
     ObjectiveWeight,
     DefectType
 )
@@ -39,7 +40,7 @@ from bioptim import (
 stiffness = 14160
 damping = 91
 
-class DynamicModel(TorqueBiorbdModel):
+class DynamicModel(TorqueDerivativeBiorbdModel):
     def __init__(self, biorbd_model_path):
         super().__init__(biorbd_model_path)
 
@@ -80,7 +81,9 @@ class DynamicModel(TorqueBiorbdModel):
 
         q = DynamicsFunctions.get(nlp.states["q"], states)
         qdot = DynamicsFunctions.get(nlp.states["qdot"], states)
-        tau = DynamicsFunctions.get(nlp.controls["tau"], controls)
+        tau = DynamicsFunctions.get(nlp.states["tau"], states)
+        taudot = DynamicsFunctions.get(nlp.controls["taudot"], controls)
+
         tau[0] = -stiffness * q[0] + damping * qdot[0]  # x
         tau[1] = -stiffness * q[1] + damping * qdot[1]  # z
 
@@ -91,14 +94,15 @@ class DynamicModel(TorqueBiorbdModel):
         if isinstance(nlp.dynamics_type.ode_solver, OdeSolver.COLLOCATION):
             slope_q = DynamicsFunctions.get(nlp.states_dot["q"], nlp.states_dot.scaled.cx)
             slope_qdot = DynamicsFunctions.get(nlp.states_dot["qdot"], nlp.states_dot.scaled.cx)
+            slope_tau = DynamicsFunctions.get(nlp.states_dot["tau"], nlp.states_dot.scaled.cx)
 
             if nlp.dynamics_type.ode_solver.defects_type == DefectType.QDDOT_EQUALS_FORWARD_DYNAMICS:
-                defects = vertcat(slope_q, slope_qdot) * nlp.dt - vertcat(qdot, qddot)* nlp.dt
-                # defects = vertcat(slope_q, slope_qdot)  - vertcat(qdot, qddot) # for extra accuracy
+                defects = vertcat(slope_q, slope_qdot, slope_tau)  - vertcat(qdot, qddot, taudot)
+
 
             elif nlp.dynamics_type.ode_solver.defects_type == DefectType.TAU_EQUALS_INVERSE_DYNAMICS:
                 tau_id = nlp.model.inverse_dynamics(with_contact=False)(q, qdot, slope_qdot, [], [])
-                defects = vertcat(slope_q, tau_id) - vertcat(qdot, tau)
+                defects = vertcat(slope_q, tau_id, slope_tau) - vertcat(qdot, tau, taudot)
 
 
         return DynamicsEvaluation(dxdt=vertcat(qdot, qddot), defects=defects)
@@ -114,7 +118,7 @@ def prepare_ocp(
         init_sol: bool,
         final_state_bound: bool,
         coef_fig : int,
-        weight_control: float,
+        weight_tau: float,
         weight_time: float = 1,
         mode: str="",         ode_solver: OdeSolverBase = OdeSolver.RK4(),
         use_sx: bool = False,
@@ -148,8 +152,8 @@ def prepare_ocp(
         If the final state is with bound (false means it's with constraints)
     coef_fig : int
         Weighting coefficient for objectives that implement FIG code specifications
-    weight_control: float
-        Weight for the control minimization objective
+    weight_tau: float
+        Weight for the torque minimization objective
     weight_time: float
         Weight for the time minimization objective
     mode : str
@@ -197,7 +201,9 @@ def prepare_ocp(
     # Add objective functions
     objective_functions = ObjectiveList()
     for phase in range(3):
-        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", quadratic=True, weight=weight_control, phase=phase)
+#        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", quadratic=True, weight=weight_tau, phase=phase)
+        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="tau", quadratic=True, weight=weight_tau, phase=phase)
+        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="taudot", quadratic=True, weight=0.1, phase=phase)
         objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=weight_time, min_bound=min_time, max_bound=max_time,phase=phase)
 
 
@@ -303,9 +309,12 @@ def prepare_ocp(
         u_max[idx["RyThighL"]] = 9.36 * total_mass
 
     u_bounds = BoundsList()
-    for phase in range(3):
-        u_bounds.add("tau", min_bound=u_min, max_bound=u_max, phase=phase)
+    # for phase in range(3):
+    #     u_bounds.add("tau", min_bound=u_min, max_bound=u_max, phase=phase)
 
+
+    for phase in range(3):
+        x_bounds.add("tau", min_bound=u_min, max_bound=u_max, phase=phase)
 
     if x_init is None:
         rotations = [rot_start, -np.pi / 3, -np.pi, -2 * np.pi]
@@ -318,11 +327,13 @@ def prepare_ocp(
             x_init.add("q", init_q, phase=phase, interpolation=InterpolationType.LINEAR)
             x_init.add("qdot", [0] * n_q, phase=phase)
 
+            x_init.add("tau", [0] * n_tau, phase=phase)
+
     if u_init is None:
         u_init = InitialGuessList()
         for phase in range(3):
-            u_init.add("tau", [0] * n_tau, phase=phase)
-
+        #     u_init.add("tau", [0] * n_tau, phase=phase)
+            u_init.add("taudot", [0] * n_tau, phase=phase)
 
     return OptimalControlProgram(
         bio_model,
@@ -347,7 +358,7 @@ def main():
     RESULTS_DIR = os.path.join(CURRENT_DIR, "applied_examples/results")
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    use_pkl = True
+    use_pkl = False
 
     n_shooting = (50, 50, 50)
 
@@ -363,7 +374,7 @@ def main():
 
             ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1),
                               n_shooting=n_shooting, min_time=0.2, max_time=2, coef_fig=1, total_mass=masse,
-                              init_sol=True, weight_control=1, weight_time=0.1,final_state_bound=True, n_threads=os.cpu_count()-2,
+                              init_sol=True, weight_tau=1, weight_time=0.1,final_state_bound=True, n_threads=os.cpu_count()-2,
                               use_sx=True)
             #todo compare final_state_bound=True vs False ... False should be faster
             # --- Live plots --- #
@@ -434,7 +445,7 @@ def main():
 
                 # solution complete
                 ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1), n_shooting=n_shooting,
-                                  min_time=0.01, max_time=2, total_mass=masse, init_sol=False, weight_control=0.0001, weight_time=1,
+                                  min_time=0.01, max_time=2, total_mass=masse, init_sol=False, weight_tau=0.0001, weight_time=1,
                                   coef_fig=1,final_state_bound=True, mode=mode, n_threads=os.cpu_count()-2, use_sx=True)
 
                 # --- Live plots --- #
