@@ -29,6 +29,7 @@ from bioptim import (
     DynamicsOptions,
     TorqueBiorbdModel,
     ObjectiveWeight,
+    DefectType
 )
 
 #Define the stiffness and damping of the bar as global variables
@@ -87,22 +88,14 @@ class DynamicModel(TorqueBiorbdModel):
         if isinstance(nlp.dynamics_type.ode_solver, OdeSolver.COLLOCATION):
             slope_q = DynamicsFunctions.get(nlp.states_dot["q"], nlp.states_dot.scaled.cx)
             slope_qdot = DynamicsFunctions.get(nlp.states_dot["qdot"], nlp.states_dot.scaled.cx)
-            defects = vertcat(slope_q, slope_qdot) * nlp.dt - vertcat(qdot, qddot)* nlp.dt
-            # defects = vertcat(slope_q, slope_qdot)  - vertcat(qdot, qddot)
 
-        # dq = DynamicsFunctions.compute_qdot(nlp, q, qdot)
-        # defects[nlp.states["q"].index, 0] = slope_q - dq
-        #
-        # external_forces = DynamicsFunctions.get_external_forces_from_contacts(
-        #     nlp, q, qdot, nlp.model.contact_types, external_forces
-        # )
-        # # TODO: We do not use DynamicsFunctions.inverse_dynamics here since tau is not in the variables (this should be refactored)
-        # tau_id = nlp.model.inverse_dynamics(with_contact=False)(
-        #     q, qdot, slope_qdot, external_forces, nlp.parameters.cx
-        # )
-        # tau_defects = tau - tau_id
-        # defects[nlp.states["qdot"].index, 0] = tau_defects
+            if nlp.dynamics_type.ode_solver.defects_type == DefectType.QDDOT_EQUALS_FORWARD_DYNAMICS:
+                defects = vertcat(slope_q, slope_qdot) * nlp.dt - vertcat(qdot, qddot)* nlp.dt
+                # defects = vertcat(slope_q, slope_qdot)  - vertcat(qdot, qddot) # for extra accuracy
 
+            elif nlp.dynamics_type.ode_solver.defects_type == DefectType.TAU_EQUALS_INVERSE_DYNAMICS:
+                tau_id = nlp.model.inverse_dynamics(with_contact=False)(q, qdot, slope_qdot, [], [])
+                defects = vertcat(slope_q, tau_id) - vertcat(qdot, tau)
 
 
         return DynamicsEvaluation(dxdt=vertcat(qdot, qddot), defects=defects)
@@ -228,7 +221,7 @@ def prepare_ocp(
         dynamics.add(DynamicsOptions(
             expand_dynamics=expand_dynamics,
             phase_dynamics=phase_dynamics,
-            ode_solver=OdeSolver.COLLOCATION(method="radau", polynomial_degree=5)
+            ode_solver=OdeSolver.COLLOCATION(method="radau", polynomial_degree=5, defects_type=DefectType.TAU_EQUALS_INVERSE_DYNAMICS),
         ))
 
 
@@ -351,7 +344,7 @@ def main():
 
     n_shooting = (50, 50, 50)
 
-    for num in [501]:    #range(576):
+    for num in [2]:    #range(576):
 
         filename = f"/applied_examples/athlete_{num}_deleva.bioMod"
         print("model : ", filename)
@@ -364,7 +357,7 @@ def main():
             ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1),
                               n_shooting=n_shooting, min_time=0.2, max_time=2, coef_fig=1, total_mass=masse,
                               init_sol=True, weight_control=1, weight_time=0.1,final_state_bound=True, n_threads=16,
-                              use_sx=False)
+                              use_sx=True)
             #todo compare final_state_bound=True vs False ... False should be faster
             # --- Live plots --- #
             ocp.add_plot_penalty(CostType.ALL)  # This will display the objectives and constraints at the current iteration
@@ -435,7 +428,7 @@ def main():
                 # solution complete
                 ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1), n_shooting=n_shooting,
                                   min_time=0.01, max_time=2, total_mass=masse, init_sol=False, weight_control=0.0001, weight_time=1,
-                                  coef_fig=1,final_state_bound=True, mode=mode, n_threads=16, use_sx=False)
+                                  coef_fig=1,final_state_bound=True, mode=mode, n_threads=16, use_sx=True)
 
                 # --- Live plots --- #
                 ocp.add_plot_penalty(CostType.ALL)  # This will display the objectives and constraints at the current iteration
