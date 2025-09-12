@@ -4,6 +4,9 @@ from casadi import MX, vertcat
 import os
 import pickle
 
+import matplotlib
+matplotlib.use("Qt5Agg")
+
 from bioptim import (
     Node,
     ConstraintList,
@@ -191,7 +194,6 @@ def prepare_ocp(
     idx_joints = np.arange(idx["RyHands"] + 1, idx["FootL"] + 1)  # index to constraint to 0 in the final state (all except those of the hands)
 
 
-
     # Add objective functions
     objective_functions = ObjectiveList()
     for phase in range(3):
@@ -199,7 +201,7 @@ def prepare_ocp(
         objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=weight_time, min_bound=min_time, max_bound=max_time,phase=phase)
 
 
-    if init_sol is False:
+    if not init_sol:
         for phase in range(3):
             # to stabilize the movement
             objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="qdot", weight=1, derivative=True, phase=phase)
@@ -221,7 +223,8 @@ def prepare_ocp(
         dynamics.add(DynamicsOptions(
             expand_dynamics=expand_dynamics,
             phase_dynamics=phase_dynamics,
-            ode_solver=OdeSolver.COLLOCATION(method="radau", polynomial_degree=5, defects_type=DefectType.TAU_EQUALS_INVERSE_DYNAMICS),
+            ode_solver=OdeSolver.COLLOCATION(method="radau", polynomial_degree=5,
+                                             defects_type=DefectType.TAU_EQUALS_INVERSE_DYNAMICS),
         ))
 
 
@@ -231,6 +234,8 @@ def prepare_ocp(
         # avoid the lower bar
         constraint_list.add(ConstraintFcn.SUPERIMPOSE_MARKERS, node=Node.ALL, first_marker="LowerBarMarker",
                             second_marker="MarkerR", min_bound=0.02, max_bound=np.inf, axes=Axis.X, phase=1)
+
+
 
         # impose the orientation of the pelvic during the descent phase
         if mode == "anteversion":
@@ -340,11 +345,13 @@ def main():
 
     CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
     RESULTS_DIR = os.path.join(CURRENT_DIR, "applied_examples/results")
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
     use_pkl = True
 
     n_shooting = (50, 50, 50)
 
-    for num in [2]:    #range(576):
+    for num in range(100,102):    #range(576):
 
         filename = f"/applied_examples/athlete_{num}_deleva.bioMod"
         print("model : ", filename)
@@ -356,7 +363,7 @@ def main():
 
             ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1),
                               n_shooting=n_shooting, min_time=0.2, max_time=2, coef_fig=1, total_mass=masse,
-                              init_sol=True, weight_control=1, weight_time=0.1,final_state_bound=True, n_threads=16,
+                              init_sol=True, weight_control=1, weight_time=0.1,final_state_bound=True, n_threads=os.cpu_count()-2,
                               use_sx=True)
             #todo compare final_state_bound=True vs False ... False should be faster
             # --- Live plots --- #
@@ -428,7 +435,7 @@ def main():
                 # solution complete
                 ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1), n_shooting=n_shooting,
                                   min_time=0.01, max_time=2, total_mass=masse, init_sol=False, weight_control=0.0001, weight_time=1,
-                                  coef_fig=1,final_state_bound=True, mode=mode, n_threads=16, use_sx=True)
+                                  coef_fig=1,final_state_bound=True, mode=mode, n_threads=os.cpu_count()-2, use_sx=True)
 
                 # --- Live plots --- #
                 ocp.add_plot_penalty(CostType.ALL)  # This will display the objectives and constraints at the current iteration

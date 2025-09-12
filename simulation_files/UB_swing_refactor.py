@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Tuple
 
+import matplotlib
+matplotlib.use("Qt5Agg")
+
 import numpy as np
 import pandas as pd
 from casadi import MX, vertcat
@@ -35,6 +38,7 @@ from bioptim import (
     DynamicsOptions,
     TorqueBiorbdModel,
     ObjectiveWeight,
+    DefectType,
 )
 
 
@@ -112,7 +116,14 @@ class DynamicModel(TorqueBiorbdModel):
         if isinstance(nlp.dynamics_type.ode_solver, OdeSolver.COLLOCATION):
             slope_q = DynamicsFunctions.get(nlp.states_dot["q"], nlp.states_dot.scaled.cx)
             slope_qdot = DynamicsFunctions.get(nlp.states_dot["qdot"], nlp.states_dot.scaled.cx)
+
+        if nlp.dynamics_type.ode_solver.defects_type == DefectType.QDDOT_EQUALS_FORWARD_DYNAMICS:
             defects = vertcat(slope_q, slope_qdot) * nlp.dt - vertcat(qdot, qddot) * nlp.dt
+            # defects = vertcat(slope_q, slope_qdot) - vertcat(qdot, qddot)
+
+        elif nlp.dynamics_type.ode_solver.defects_type == DefectType.TAU_EQUALS_INVERSE_DYNAMICS:
+                tau_id = nlp.model.inverse_dynamics(with_contact=False)(q, qdot, slope_qdot, [], [])
+                defects = vertcat(slope_q - qdot, tau - tau_id)
 
         return DynamicsEvaluation(dxdt=vertcat(qdot, qddot), defects=defects)
 
@@ -303,7 +314,8 @@ def prepare_ocp(
             DynamicsOptions(
                 expand_dynamics=expand_dynamics,
                 phase_dynamics=phase_dynamics,
-                ode_solver=OdeSolver.COLLOCATION(method="radau", polynomial_degree=5),
+                ode_solver=OdeSolver.COLLOCATION(method="radau", polynomial_degree=5,
+                                                 defects_type=DefectType.TAU_EQUALS_INVERSE_DYNAMICS),
             )
         )
 
@@ -458,9 +470,9 @@ def main():
     use_pkl = True
     n_shooting = (50, 50, 50)
 
-    for num in [501]:  # or range(576)
+    for num in [102]:  # or range(576)
         model_path = (ROOT / f"applied_examples/athlete_{num}_deleva.bioMod").as_posix()
-        print("model:", filename)
+        print("model:", model_path)
 
         masses = pd.read_csv(ROOT / "applied_examples" / "masses.csv")
         total_mass = float(masses["total_mass"][num - 1])
@@ -481,7 +493,7 @@ def main():
                 weight_control=1.0,
                 weight_time=0.1,
                 final_state_bound=True,
-                n_threads=16,
+                n_threads=os.cpu_count()-2,
                 use_sx=False,
             )
 
@@ -490,9 +502,7 @@ def main():
 
             solver = Solver.IPOPT(show_online_optim=False)
             solver.set_linear_solver("ma57")
-            solver.set_bound_frac(1e-8)
-            solver.set_bound_push(1e-8)
-            solver.set_maximum_iterations(20000)
+            solver.set_maximum_iterations(5000)
 
             print("start solving (initial)")
             sol = ocp.solve(solver)
@@ -532,7 +542,7 @@ def main():
                     coef_fig=1.0,
                     final_state_bound=True,
                     mode=mode,
-                    n_threads=16,
+                    n_threads=os.cpu_count()-2,
                     use_sx=False,
                 )
 
@@ -563,7 +573,7 @@ def main():
                 print("object solution of full solution saved")
 
             # Optional animation example
-            if num == 502:
+            if num == 102:
                 viewer = "pyorerun"
                 sol.animate(n_frames=0, viewer=viewer, show_now=True)
 
