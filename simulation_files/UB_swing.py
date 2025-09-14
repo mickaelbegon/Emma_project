@@ -197,6 +197,7 @@ def prepare_ocp(
     idx = {name: int(i) for i, name in enumerate(names) if name}
     idx_joints = np.arange(idx["RyHands"] + 1, idx["FootL"] + 1)  # index to constraint to 0 in the final state (all except those of the hands)
 
+    weights = {"Elbow": 5, "KneeR": 10, "FootR": 2}
 
     # Add objective functions
     objective_functions = ObjectiveList()
@@ -205,23 +206,23 @@ def prepare_ocp(
         objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="tau", quadratic=True, weight=weight_tau, phase=phase)
         objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="taudot", quadratic=True, weight=0.1, phase=phase)
         objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=weight_time, min_bound=min_time, max_bound=max_time,phase=phase)
+        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="qdot", weight=1, derivative=True, phase=phase)
+
+        # FIG code specifications (knees, elbows and ankles flexion and thighs abduction)
+        for name, w in weights.items():
+            objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE,
+                key="q", index=idx[name],target=0,weight=w * coef_fig,phase=phase)
 
 
-    if not init_sol:
-        for phase in range(3):
-            # to stabilize the movement
-            objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="qdot", weight=1, derivative=True, phase=phase)
+        leg_weight = np.zeros(n_shooting[0]+1)
+        leg_weight[:int(n_shooting[0]/2)] = 3
 
-            # FIG code specifications (knees, elbows and ankles flexion and thighs abduction)
-            weights = {"Elbow": 5, "KneeR": 10, "FootR": 2}
-
-            for name, w in weights.items():
-                objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE,
-                    key="q", index=idx[name],target=0,weight=w * coef_fig,phase=phase)
-
-        leg_weight = np.hstack((3*np.ones(26), np.zeros(25)))
-        objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_STATE, key="q", index=idx["RxThighR"], node=Node.ALL,weight=ObjectiveWeight(leg_weight, interpolation=InterpolationType.EACH_FRAME))
+        objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_STATE, key="q", index=idx["RxThighR"], phase=0,  node=Node.ALL,
+                                weight=ObjectiveWeight(leg_weight, interpolation=InterpolationType.EACH_FRAME))
         objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE, key="q", index=idx["RxThighR"], target=0, weight=3*coef_fig, phase=2)
+
+
+
 
     # Dynamics
     dynamics = DynamicsOptionsList()
@@ -236,22 +237,24 @@ def prepare_ocp(
 
     # Constraints
     constraint_list = ConstraintList()
-    if init_sol is False:
-        # avoid the lower bar
-        constraint_list.add(ConstraintFcn.SUPERIMPOSE_MARKERS, node=Node.ALL, first_marker="LowerBarMarker",
-                            second_marker="MarkerR", min_bound=0.02, max_bound=np.inf, axes=Axis.X, phase=1)
+    #if init_sol is False:
+        # avoid the lower bar when min_bound=0.02
+    constraint_list.add(ConstraintFcn.SUPERIMPOSE_MARKERS, node=Node.ALL, first_marker="LowerBarMarker",
+                            second_marker="MarkerR", min_bound=-1234, max_bound=np.inf, axes=Axis.X, phase=1)
 
 
 
-        # impose the orientation of the pelvic during the descent phase
-        if mode == "anteversion":
-            constraint_list.add(ConstraintFcn.TRACK_MARKERS, phase=0, node=Node.ALL, reference_jcs=idx["Back"],
-                                marker_index=3, axes=Axis.X, min_bound=-np.inf, max_bound=0, )
-        elif mode == "retroversion":
-            constraint_list.add(ConstraintFcn.TRACK_MARKERS, phase=0, node=Node.ALL, reference_jcs=idx["Back"],
-                                marker_index=3, axes=Axis.X, min_bound=0, max_bound= np.inf,)
+    # impose the orientation of the pelvic during the descent phase
+    # anteversion: min_bound=0, max_bound= np.inf,
+    # retroversion: min_bound=0, max_bound= np.inf,
+        #if mode == "anteversion":
+    constraint_list.add(ConstraintFcn.TRACK_MARKERS, phase=0, node=Node.ALL, reference_jcs=idx["Back"],
+                        marker_index=3, axes=Axis.X, min_bound=-2345, max_bound=3456, )
+        #elif mode == "retroversion":
+        #    constraint_list.add(ConstraintFcn.TRACK_MARKERS, phase=0, node=Node.ALL, reference_jcs=idx["Back"],
+        #                        marker_index=3, axes=Axis.X, min_bound=0, max_bound= np.inf,)
 
-    # end of the first phase when the feet reach the height of the lower bar
+    # end of  phase[0] when the feet reach the height of the lower bar
     constraint_list.add(ConstraintFcn.SUPERIMPOSE_MARKERS, node=Node.END, first_marker="LowerBarMarker",
                         second_marker="MarkerR", axes=Axis.Z, phase=0, min_bound=0.02, max_bound=0.02)
 
@@ -317,16 +320,17 @@ def prepare_ocp(
         x_bounds.add("tau", min_bound=u_min, max_bound=u_max, phase=phase)
 
     if x_init is None:
-        rotations = [rot_start, -np.pi / 3, -np.pi, -2 * np.pi]
+        rotations = [rot_start, -np.pi / 4, -np.pi, -2 * np.pi]
         x_init = InitialGuessList()
         for phase in range(3):
             init_q = np.zeros((n_q, 2))
             init_q[idx["RyHands"],0] = rotations[phase]
-            init_q[idx["RyHands"],1] = rotations[phase+1]
+            init_q[idx["RyHands"],1] = rotations[phase] + (rotations[phase+1]-rotations[phase])*6 #ordre DC+1
+            init_qdot = np.zeros((n_q,1))
+            init_qdot[idx["RyHands"],:] = -np.pi
 
             x_init.add("q", init_q, phase=phase, interpolation=InterpolationType.LINEAR)
-            x_init.add("qdot", [0] * n_q, phase=phase)
-
+            x_init.add("qdot", init_qdot, phase=phase)
             x_init.add("tau", [0] * n_tau, phase=phase)
 
     if u_init is None:
@@ -360,8 +364,7 @@ def main():
 
     use_pkl = False
 
-    n_shooting = (50, 50, 50)
-    n_shooting = (10, 10, 10)
+    n_shooting = (25, 25, 50)
 
     for num in range(100,102):    #range(576):
 
@@ -385,33 +388,44 @@ def main():
             ocp.print(to_console=False, to_graph=False)
 
             # --- Solve the ocp --- #
-            solver = Solver.IPOPT(show_online_optim=False)
+            solver = Solver.IPOPT()#show_online_optim=True
             solver.set_linear_solver("ma57")
-            #solver.set_hessian_approximation("limited-memory")
+            solver.set_maximum_iterations(1000)
             solver.set_bound_frac(1e-8)
             solver.set_bound_push(1e-8)
-            # solver.set_tol(1e-3)
-            solver.set_maximum_iterations(20000)
+            solver.set_acceptable_tol(1e-3)
 
             print("start solving")
             sol = ocp.solve(solver)
             print("solving finished")
 
-            qs = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['q']
-            qdots = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['qdot']
-            taus = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['tau']
+            parts_s = sol.decision_states(to_merge=[SolutionMerge.NODES])  # list per phase
+            parts_u = sol.decision_controls(to_merge=[SolutionMerge.NODES])  # list per phase
+            x_init = InitialGuessList()
+            u_init = InitialGuessList()
+            for p, (ps, pu) in enumerate(zip(parts_s, parts_u)):
+                x_init.add("q", ps["q"], InterpolationType.ALL_POINTS, phase=p)
+                x_init.add("qdot", ps["qdot"], InterpolationType.ALL_POINTS, phase=p)
+                x_init.add("tau", ps["tau"], InterpolationType.ALL_POINTS, phase=p)
+                u_init.add("taudot", pu["taudot"], InterpolationType.EACH_FRAME, phase=p)
 
-            for i in range(1, len(sol.decision_states(to_merge=[SolutionMerge.NODES]))):
-                qs = np.hstack((qs, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['q']))
-                qdots = np.hstack((qdots, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['qdot']))
-                taus = np.hstack((taus, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['tau']))
+            ocp.update_initial_guess(x_init=x_init, u_init=u_init, )
+            #todo: correct ValueError: show_online_optim and online_optim cannot be simultaneous set
+            solver.set_maximum_iterations(2000)
+            solver.set_acceptable_tol(1e-3)
+            #solver.show_online_optim = None
+            #solver.online_optim = 0
+            sol2 = ocp.solve(solver)
+
+
+            parts_s = sol.decision_states(to_merge=[SolutionMerge.NODES])
+            qs = np.hstack([p["q"] for p in parts_s])
+            qdots = np.hstack([p["qdot"] for p in parts_s])
+            taus = np.hstack([p["tau"] for p in parts_s])
 
             #taus = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['tau']
-            taudots = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['taudot']
+            taudots = np.hstack([p["taudot"] for p in sol.decision_controls(to_merge=[SolutionMerge.NODES])])
             time = sol.stepwise_time(to_merge=[SolutionMerge.NODES, SolutionMerge.PHASES]).T[0]
-
-            for i in range(1, len(sol.decision_controls(to_merge=[SolutionMerge.NODES]))):
-                taus = np.hstack((taus, sol.decision_controls(to_merge=[SolutionMerge.NODES])[i]['tau']))
 
             # # --- Save the solution --- #
             with open(os.path.join(RESULTS_DIR, f"athlete{num}_base.pkl"), "wb") as file:
@@ -429,7 +443,7 @@ def main():
         qs = prev_sol_data["q"]
         qdots = prev_sol_data["qdot"]
         taus = prev_sol_data["tau"]
-        taudots = prev_sol_data["taudots"]
+        taudots = prev_sol_data["taudot"]
 
         # Create the initial solution (warm start)
         ns = np.array(n_shooting)
