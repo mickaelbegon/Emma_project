@@ -108,6 +108,7 @@ class DynamicModel(TorqueDerivativeBiorbdModel):
         return DynamicsEvaluation(dxdt=vertcat(qdot, qddot), defects=defects)
 
 
+
 def prepare_ocp(
         biorbd_model_path: str,
         final_time: tuple,
@@ -184,6 +185,7 @@ def prepare_ocp(
     -------
     The OptimalControlProgram ready to be solved
     """
+    polynomial_degree = 5
     bio_model = (DynamicModel(biorbd_model_path), DynamicModel(biorbd_model_path), DynamicModel(biorbd_model_path))
 
     n_tau = bio_model[0].nb_tau
@@ -192,43 +194,35 @@ def prepare_ocp(
     # Index of useful degrees of freedom
     names = ["TxHands", "TzHands", "RyHands",
              "Elbow", "Shoulder", "Back", "Neck",
-             "RxThighR", "RyThighR", "KneeR", "AnkleR",
-             "RxThighL", "RyThighL", "KneeL", "AnkleL"] #todo: mettre le bons noms des articulations : model.dof_name
-
-    ('HANDS_TransX',     'HANDS_TransZ',     'HANDS_RotY',
-     'UPPER_ARMS_RotY',     'UPPER_TRUNK_RotY',     'LOWER_TRUNK_RotY',     'HEAD_RotY',
-     'R_THIGH_RotX',     'R_THIGH_RotY',      'R_SHANK_RotY',     'R_FOOT_RotY',
-     'L_THIGH_RotX',     'L_THIGH_RotY',     'L_SHANK_RotY',     'L_FOOT_RotY')
-
-
-
+             "HipAbdR", "HipFlexR", "KneeR", "AnkleR",
+             "HipAbdL", "HipFlexL", "KneeL", "AnkleL"] #todo: mettre le bons noms des articulations : model.dof_name
 
     idx = {name: int(i) for i, name in enumerate(names) if name}
     idx_joints = np.arange(idx["RyHands"] + 1, idx["AnkleR"] + 1)  # index to constraint to 0 in the final state (all except those of the hands)
 
     weights = {"Elbow": 5, "KneeR": 10, "AnkleR": 2}
+    weight_abd = np.zeros(n_shooting[0])
+    weight_abd[int(n_shooting[0]/2):] = 6
 
     # Add objective functions
     objective_functions = ObjectiveList()
     for phase in range(3):
 #        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", quadratic=True, weight=weight_tau, phase=phase)
         objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="tau", quadratic=True, weight=weight_tau, phase=phase)
-        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="taudot", quadratic=True, weight=0.01, phase=phase)
+        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="taudot", quadratic=True, weight=weight_tau/100, phase=phase)
         objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=weight_time, min_bound=min_time, max_bound=max_time,phase=phase)
         objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="qdot", weight=1, derivative=True, phase=phase)
 
         # FIG code specifications (knees, elbows and ankles flexion and thighs abduction)
         for name, w in weights.items():
             objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE,
-                key="q", index=idx[name],target=0, weight=w * coef_fig, phase=phase)
+                key="q", phase=phase, index=idx[name],target=0, weight=w * coef_fig, )
 
-
-        leg_weight = np.zeros(n_shooting[0]+1)
-        leg_weight[:int(n_shooting[0]/2)] = 3
-
-        objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_STATE, key="q", index=idx["RxThighR"], phase=0,  node=Node.ALL,
-                                weight=ObjectiveWeight(leg_weight, interpolation=InterpolationType.EACH_FRAME))
-        objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE, key="q", index=idx["RxThighR"], target=0, weight=3*coef_fig, phase=2)
+    objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE,
+                            key="q", index=idx["HipAbdR"], phase=0,
+                            target=0,#node=Node.ALL,
+                            weight=ObjectiveWeight(weight_abd, interpolation=InterpolationType.EACH_FRAME))
+    objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE, key="q", index=idx["HipAbdR"], target=0, weight=6*coef_fig, phase=2)
 
 
     # Dynamics
@@ -237,7 +231,7 @@ def prepare_ocp(
         dynamics.add(DynamicsOptions(
             expand_dynamics=expand_dynamics,
             phase_dynamics=phase_dynamics,
-            ode_solver=OdeSolver.COLLOCATION(method="radau", polynomial_degree=5,
+            ode_solver=OdeSolver.COLLOCATION(method="radau", polynomial_degree=polynomial_degree,
                                              defects_type=DefectType.TAU_EQUALS_INVERSE_DYNAMICS),
         ))
 
@@ -252,14 +246,14 @@ def prepare_ocp(
                         max_bound=np.inf, axes=Axis.X, phase=1)
 
 
-
     # impose the orientation of the pelvic during the descent phase
     # anteversion: min_bound=0, max_bound= np.inf,
     # retroversion: min_bound=0, max_bound= np.inf,
         #if mode == "anteversion":
-    constraint_list.add(ConstraintFcn.TRACK_MARKERS, phase=0, node=Node.ALL, reference_jcs=idx["Back"],
-                        marker_index=3, axes=Axis.X,
-                        min_bound= 0 if mode=="antersion" else -2345,
+    constraint_list.add(ConstraintFcn.TRACK_MARKERS, phase=0, node=Node.ALL,
+                        reference_jcs=bio_model[0].segment_index("UPPER_TRUNK"),
+                        marker_index=bio_model[0].marker_index("MarkerR"), axes=Axis.X,
+                        min_bound= 0 if mode=="anteversion" else -2345,
                         max_bound= 0 if mode=="retroversion" else 3456, )
         #elif mode == "retroversion":
         #    constraint_list.add(ConstraintFcn.TRACK_MARKERS, phase=0, node=Node.ALL, reference_jcs=idx["Back"],
@@ -271,17 +265,16 @@ def prepare_ocp(
 
     #  symmetry of the thighs
     pairs = [
-        ("RxThighR", "RxThighL", -1),
-        ("RyThighR", "RyThighL", 1),
+        ("HipAbdR", "HipAbdL", -1),
+        ("HipFlexR", "HipFlexL", 1),
         ("KneeR", "KneeL", 1),
         ("AnkleR", "AnkleL", 1),
     ]
     for phase in range(3):
-        for a, b, c in pairs:
+        for dof1, dof2, coef in pairs:
             constraint_list.add(ConstraintFcn.PROPORTIONAL_STATE,
                 key="q", phase=phase, node=Node.ALL,
-                first_dof=idx[a], second_dof=idx[b],coef=c )
-
+                first_dof=idx[dof1], second_dof=idx[dof2],coef=coef)
 
     # BOUNDS
     rot_start =  -2 * np.pi / 45 # hands tilted by 8° at the start
@@ -314,13 +307,12 @@ def prepare_ocp(
     u_min = [0] * 3 + [tau_min] * (n_tau-3)
     u_max = [0] * 3 + [tau_max] * (n_tau-3)
 
-    if init_sol is False:
-        u_min[idx["Shoulder"]] = -3.11 * total_mass
-        u_max[idx["Shoulder"]] = 2.15 * total_mass
-        u_min[idx["RyThighR"]] = -4.20 * total_mass
-        u_max[idx["RyThighR"]] = 9.36 * total_mass
-        u_min[idx["RyThighL"]] = -4.20 * total_mass
-        u_max[idx["RyThighL"]] = 9.36 * total_mass
+    u_min[idx["Shoulder"]] = -3.11 * total_mass
+    u_max[idx["Shoulder"]] = 2.15 * total_mass
+    u_min[idx["HipFlexR"]] = -4.20 * total_mass
+    u_min[idx["HipFlexR"]] = -4.20 * total_mass
+    u_max[idx["HipFlexR"]] = 9.36 * total_mass
+    u_max[idx["HipFlexR"]] = 9.36 * total_mass
 
     u_bounds = BoundsList()
     # for phase in range(3):
@@ -336,7 +328,7 @@ def prepare_ocp(
         for phase in range(3):
             init_q = np.zeros((n_q, 2))
             init_q[idx["RyHands"],0] = rotations[phase]
-            init_q[idx["RyHands"],1] = rotations[phase] + (rotations[phase+1]-rotations[phase])*6 #ordre DC+1
+            init_q[idx["RyHands"],1] = rotations[phase] + (rotations[phase+1]-rotations[phase])*(polynomial_degree+1) #ordre DC+1
             init_qdot = np.zeros((n_q,1))
             init_qdot[idx["RyHands"],:] = -np.pi
 
@@ -376,6 +368,9 @@ def main():
     use_pkl = False
 
     n_shooting = (25, 25, 50)
+    weight_time = 20
+    weight_fig = 100
+    use_sx = True
 
     for num in range(100,102):    #range(576):
 
@@ -383,14 +378,15 @@ def main():
         print("model : ", filename)
         masses = pd.read_csv(CURRENT_DIR+ "/applied_examples/masses.csv")
         masse = masses["total_mass"][num-1]
+        weight_tau = 1e-4 * masse
 
         # initial solution
         if use_pkl is False or not os.path.exists(os.path.join(RESULTS_DIR, f"athlete{num}_base.pkl")):
 
             ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1),
-                              n_shooting=n_shooting, min_time=0.2, max_time=2, coef_fig=1, total_mass=masse,
-                              init_sol=True, weight_tau=1, weight_time=0.1,final_state_bound=True, n_threads=os.cpu_count()-2,
-                              use_sx=True)
+                              n_shooting=n_shooting, min_time=0.2, max_time=2, coef_fig=weight_fig, total_mass=masse,
+                              init_sol=True, weight_tau=weight_tau, weight_time=weight_time,
+                              final_state_bound=True, n_threads=os.cpu_count()-1,   use_sx=use_sx)
             #todo compare final_state_bound=True vs False ... False should be faster
             # --- Live plots --- #
             ocp.add_plot_penalty(CostType.ALL)  # This will display the objectives and constraints at the current iteration
@@ -410,16 +406,12 @@ def main():
             sol = ocp.solve(solver)
             print("solving finished")
 
-            # parts_s = sol.decision_states(to_merge=[SolutionMerge.NODES])  # list per phase
-            # parts_u = sol.decision_controls(to_merge=[SolutionMerge.NODES])  # list per phase
-            # x_init = InitialGuessList()
-            # u_init = InitialGuessList()
-            # for p, (ps, pu) in enumerate(zip(parts_s, parts_u)):
-            #     x_init.add("q", ps["q"], InterpolationType.ALL_POINTS, phase=p)
-            #     x_init.add("qdot", ps["qdot"], InterpolationType.ALL_POINTS, phase=p)
-            #     x_init.add("tau", ps["tau"], InterpolationType.ALL_POINTS, phase=p)
-            #     u_init.add("taudot", pu["taudot"], InterpolationType.EACH_FRAME, phase=p)
-            #
+
+
+
+            # ocp.nlp[0].g[0].bound
+            # ocp.solve(warm_start=sol)
+
             # ocp.update_initial_guess(x_init=x_init, u_init=u_init, )
             # #todo: correct ValueError: show_online_optim and online_optim cannot be simultaneous set
             # solver.set_maximum_iterations(2000)
@@ -473,13 +465,16 @@ def main():
 
 
         for mode in ['anteversion', 'retroversion']:
-
             if use_pkl is False or not os.path.exists(os.path.join(RESULTS_DIR, f"athlete{num}_complet_{mode}.pkl")):
 
                 # solution complete
                 ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1), n_shooting=n_shooting,
-                                  min_time=0.01, max_time=2, total_mass=masse, init_sol=False, weight_tau=0.0001, weight_time=1,
-                                  coef_fig=1,final_state_bound=True, mode=mode, n_threads=os.cpu_count()-2, use_sx=True)
+                                  min_time=0.01, max_time=2, total_mass=masse,
+                                  init_sol=False,# u_init=u_init, x_init=x_init,
+                                  weight_tau=weight_tau, weight_time=weight_time,
+                                  coef_fig=1,
+                                  final_state_bound=True, mode=mode,
+                                  n_threads=os.cpu_count()-1, use_sx=use_sx)
 
                 # --- Live plots --- #
                 ocp.add_plot_penalty(CostType.ALL)  # This will display the objectives and constraints at the current iteration
@@ -488,9 +483,6 @@ def main():
                 ocp.print(to_console=False, to_graph=False)
 
                 # --- Solve the ocp --- #
-                solver = Solver.IPOPT()
-                solver.set_linear_solver("ma57")
-                solver.set_maximum_iterations(20000)
                 sol = ocp.solve(solver)
 
                 qs = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['q']
@@ -529,9 +521,6 @@ def main():
             if num == 502:
                 viewer = "pyorerun"
                 sol.animate(n_frames=0, viewer=viewer, show_now=True)
-
-
-
 
 
 if __name__ == "__main__":
