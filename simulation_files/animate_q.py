@@ -13,9 +13,9 @@ modelname = os.path.join(CURRENT_DIR, "applied_examples", f"athlete_{athlete}_de
 model = BiorbdModel(modelname)
 
 
-base_pkl = os.path.join(RESULTS_DIR, f"athlete{athlete}_base.pkl")
-#base_plk = os.path.join(RESULTS_DIR, f"athlete{athlete}_complet_retroversion.pkl")
-base_plk = os.path.join(RESULTS_DIR, f"athlete{athlete}_complet_anteversion.pkl")
+base_pkl = os.path.join(RESULTS_DIR, f"athlete{athlete}_base.pkl")#
+base_pkl = os.path.join(RESULTS_DIR, f"athlete{athlete}_complet_retroversion.pkl")
+#base_pkl = os.path.join(RESULTS_DIR, f"athlete{athlete}_complet_anteversion.pkl")
 
 if not os.path.exists(base_pkl) or os.path.getsize(base_pkl) == 0:
     raise FileNotFoundError(f"Fichier absent ou vide: {base_pkl}")
