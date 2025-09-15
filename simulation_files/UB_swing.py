@@ -209,7 +209,7 @@ def prepare_ocp(
     for phase in range(3):
 #        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", quadratic=True, weight=weight_tau, phase=phase)
         objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="tau", quadratic=True, weight=weight_tau, phase=phase)
-        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="taudot", quadratic=True, weight=weight_tau/100, phase=phase)
+        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="taudot", quadratic=True, weight=weight_tau/1000, phase=phase)
         objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=weight_time, min_bound=min_time, max_bound=max_time,phase=phase)
         objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_STATE, key="qdot", weight=1, derivative=True, phase=phase)
 
@@ -368,7 +368,7 @@ def main():
     use_pkl = False
 
     n_shooting = (25, 25, 50)
-    weight_time = 20
+    weight_time = .1
     weight_fig = 100
     use_sx = True
 
@@ -405,7 +405,7 @@ def main():
             print("start solving")
             sol = ocp.solve(solver)
             print("solving finished")
-
+            sol.print_cost()
 
 
 
