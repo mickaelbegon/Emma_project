@@ -325,6 +325,156 @@ def prepare_ocp(
         constraints=constraint_list,
     )
 
+def save_sol(sol, filename):
+
+    # --- Check if an optimal solution could be found --- #
+    if sol.status == 0:
+        savename_sufix = "_CVG.pkl"
+    else:
+        savename_sufix = "_DVG.pkl"
+
+    # Get the Bioptim version used to generate the results
+    import git
+    from datetime import date
+    repo = git.Repo(search_parent_directories=True)
+    commit_id = str(repo.commit())
+    branch = str(repo.active_branch)
+    tag = repo.git.describe("--tags")
+    bioptim_version = repo.git.version_info
+    git_date = repo.git.log("-1", "--format=%cd")
+    version_dic = {
+        "commit_id": commit_id,
+        "git_date": git_date,
+        "branch": branch,
+        "tag": tag,
+        "bioptim_version": bioptim_version,
+        "date_of_the_optimization": date.today().strftime("%b-%d-%Y-%H-%M-%S"),
+    }
+
+    # --- Save the basic variables for "warm-start" from the solution --- #
+    time = sol.stepwise_time(to_merge=[SolutionMerge.NODES, SolutionMerge.PHASES]).T[0]
+    qs = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['q']
+    qdots = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['qdot']
+    taus = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['tau']
+    for i in range(1, len(sol.decision_states(to_merge=[SolutionMerge.NODES]))):
+        qs = np.hstack((qs, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['q']))
+        qdots = np.hstack((qdots, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['qdot']))
+        taus = np.hstack((taus, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['tau']))
+
+    taudots = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['taudot']
+    for i in range(1, len(sol.decision_controls(to_merge=[SolutionMerge.NODES]))):
+        taudots = np.hstack((taus, sol.decision_controls(to_merge=[SolutionMerge.NODES])[i]['taudot']))
+
+    with open(filename + "_basic_variables" + savename_sufix, "wb") as file:
+        data = {
+            "time": time,
+            "q": qs, "qdot": qdots,
+            "tau": taus,
+            "taudots": taudots,
+            "version_dic": version_dic,
+        }
+        pickle.dump(data, file)
+    print("initial solution saved")
+
+    # --- Save more complete data for a posteriori analysis --- #
+    data = {}
+    list_time = sol.decision_time(to_merge=SolutionMerge.NODES)
+    states = sol.decision_states(to_merge=SolutionMerge.NODES)
+    controls = sol.decision_controls(to_merge=SolutionMerge.NODES)
+
+    q = []
+    qdot = []
+    tau = []
+    taudot = []
+    time = []
+    min_bounds_q = []
+    max_bounds_q = []
+    min_bounds_qdot = []
+    max_bounds_qdot = []
+    min_bounds_tau = []
+    max_bounds_tau = []
+    min_bounds_taudot = []
+    max_bounds_taudot = []
+
+    for i in range(len(states)):
+        q.append(states[i]["q"])
+        qdot.append(states[i]["qdot"])
+        tau.append(states[i]["tau"])
+        taudot.append(controls[i]["taudot"])
+        time.append(list_time[i])
+        min_bounds_q.append(sol.ocp.nlp[i].x_bounds["q"].min)
+        max_bounds_q.append(sol.ocp.nlp[i].x_bounds["q"].max)
+        min_bounds_qdot.append(sol.ocp.nlp[i].x_bounds["qdot"].min)
+        max_bounds_qdot.append(sol.ocp.nlp[i].x_bounds["qdot"].max)
+        min_bounds_tau.append(sol.ocp.nlp[i].x_bounds["tau"].min)
+        max_bounds_tau.append(sol.ocp.nlp[i].x_bounds["tau"].max)
+        min_bounds_taudot.append(sol.ocp.nlp[i].u_bounds["taudot"].min)
+        max_bounds_taudot.append(sol.ocp.nlp[i].u_bounds["taudot"].max)
+
+    data["q"] = q
+    data["qdot"] = qdot
+    data["tau"] = tau
+    data["taudot"] = taudot
+    data["time"] = time
+    data["min_bounds_q"] = min_bounds_q
+    data["max_bounds_q"] = max_bounds_q
+    data["min_bounds_qdot"] = min_bounds_qdot
+    data["max_bounds_qdot"] = max_bounds_qdot
+    data["min_bounds_tau"] = min_bounds_tau
+    data["max_bounds_tau"] = max_bounds_tau
+    data["min_bounds_taudot"] = min_bounds_taudot
+    data["max_bounds_taudot"] = max_bounds_taudot
+
+    data["cost"] = sol.cost
+    data["iterations"] = sol.iterations
+
+    # TODO: check this
+    data["detailed_cost"] = sol.add_detailed_cost
+    # Otherwise redirect the print output
+    from contextlib import redirect_stdout
+    with open('out.txt', 'w') as f:
+        with redirect_stdout(f):
+            sol.print_cost()  # TODO: but in any ways, the output of print is ofter buggy
+
+    data["status"] = sol.status
+    data["version_dic"] = version_dic
+    data["real_time_to_optimize"] = sol.real_time_to_optimize
+    data["constraints"] = sol.constraints
+    data["lam_g"] = sol.lam_g
+    data["lam_p"] = sol.lam_p
+    data["lam_x"] = sol.lam_x
+    data["phase_time"] = sol.ocp.phase_time
+    data["n_shooting"] = sol.ocp.n_shooting
+    data["dof_names"] = sol.ocp.nlp[0].dof_names
+    data["q_all"] = np.hstack(data["q"])
+    data["qdot_all"] = np.hstack(data["qdot"])
+    data["tau_all"] = np.hstack(data["tau"])
+
+    time_end_phase = []
+    time_total = 0
+    time_all = []
+    for i in range(len(data["time"])):
+        time_all.append(data["time"][i] + time_total)
+        time_total = time_total + data["time"][i][-1]
+        time_end_phase.append(time_total)
+    data["time_all"] = np.vstack(time_all)
+    data["time_total"] = time_total
+    data["time_end_phase"] = time_end_phase
+
+    integrated_sol = sol.integrate(to_merge=SolutionMerge.NODES)
+    data["q_integrated"] = integrated_sol["q"]
+    data["qdot_integrated"] = integrated_sol["qdot"]
+    data["tau_integrated"] = integrated_sol["tau"]
+
+    with open(filename + "_full_results" + savename_sufix, "wb") as file:
+        pickle.dump(data, file)
+    print("results saved")
+
+    # --- Save the solution object for "warm-start" from the solution --- #
+    with open(filename + "_solution" + savename_sufix, "wb") as file:
+        del sol.ocp
+        pickle.dump(sol, file)
+    print("object solution saved")
 
 def main():
 
@@ -368,28 +518,12 @@ def main():
             sol = ocp.solve(solver)
             print("solving finished")
 
-            qs = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['q']
-            qdots = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['qdot']
-            for i in range(1, len(sol.decision_states(to_merge=[SolutionMerge.NODES]))):
-                qs = np.hstack((qs, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['q']))
-                qdots = np.hstack((qdots, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['qdot']))
-
-            taus = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['tau']
-
-            for i in range(1, len(sol.decision_controls(to_merge=[SolutionMerge.NODES]))):
-                taus = np.hstack((taus, sol.decision_controls(to_merge=[SolutionMerge.NODES])[i]['tau']))
-
-            # # --- Save the solution --- #
-            with open(os.path.join(RESULTS_DIR, f"athlete{num}_base.pkl"), "wb") as file:
-                data = {"q": qs, "qdot": qdots, "tau": taus, }
-                pickle.dump(data, file)
-
-            print("initial solution saved")
+            save_sol(sol, os.path.join(RESULTS_DIR, f"athlete{num}"))
 
 
         ######################################################################################################################################################
         print("load initial solution")
-        with open(os.path.join(RESULTS_DIR, f"athlete{num}_base.pkl"), "rb") as file:
+        with open(os.path.join(RESULTS_DIR, f"athlete{num}_basic_variables_CVG.pkl"), "rb") as file:
             prev_sol_data = pickle.load(file)
 
         qs = prev_sol_data["q"]
@@ -412,7 +546,7 @@ def main():
 
         for mode in ['anterversion', 'retroversion']:
 
-            if use_pkl is False or not os.path.exists(os.path.join(RESULTS_DIR, f"athlete{num}_complet_{mode}.pkl")):
+            if use_pkl is False or not os.path.exists(os.path.join(RESULTS_DIR, f"athlete{num}_complet_{mode}_basic_variables_CVG.pkl")):
             #mode = "retroversion" # "anteversion"
 
                 # solution complete
@@ -433,33 +567,7 @@ def main():
                 solver.set_maximum_iterations(20000)
                 sol = ocp.solve(solver)
 
-                qs = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['q']
-                qdots = sol.decision_states(to_merge=[SolutionMerge.NODES])[0]['qdot']
-                for i in range(1, len(sol.decision_states(to_merge=[SolutionMerge.NODES]))):
-                    qs = np.hstack((qs, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['q']))
-                    qdots = np.hstack((qdots, sol.decision_states(to_merge=[SolutionMerge.NODES])[i]['qdot']))
-
-                taus = sol.decision_controls(to_merge=[SolutionMerge.NODES])[0]['tau']
-                for i in range(1, len(sol.decision_controls(to_merge=[SolutionMerge.NODES]))):
-                    taus = np.hstack((taus, sol.decision_controls(to_merge=[SolutionMerge.NODES])[i]['tau']))
-
-                time = sol.stepwise_time(to_merge=[SolutionMerge.NODES, SolutionMerge.PHASES]).T[0]
-
-                # # --- Save the solution --- #
-                with open(os.path.join(RESULTS_DIR, f"athlete{num}_complet_{mode}.pkl"), "wb") as file:
-                    data = {"q": qs, "qdot": qdots, "tau": taus, "time": time, }
-                    pickle.dump(data, file)
-
-                    print("data of full solution saved")
-
-
-                # --- Show the results graph --- #
-                sol.print_cost()
-                sol.graphs(show_bounds=True, show_now=True)
-
-                with open(os.path.join(RESULTS_DIR, f"Sol_athlete{num}_complet_{mode}.pkl"), "wb") as file:
-                    del sol.ocp
-                    pickle.dump(sol, file)
+                save_sol(sol, os.path.join(RESULTS_DIR, f"athlete{num}_complet_{mode}"))
                 print("object solution of full solution saved")
 
             # --- Animate the solution --- #
