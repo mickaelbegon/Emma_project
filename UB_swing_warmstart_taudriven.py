@@ -116,8 +116,8 @@ class DynamicModel(TorqueBiorbdModel):
 
 def constraint_synergy_back_hip(
         controller: PenaltyController,
-        first_dof: str,
-        second_dof: str,
+        first_dof: int,
+        second_dof: int,
         key: str = "q",
 ) -> MX:
 

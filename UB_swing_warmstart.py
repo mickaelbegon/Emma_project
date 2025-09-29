@@ -114,8 +114,8 @@ class DynamicModel(TorqueDerivativeBiorbdModel):
 
 def constraint_synergy_back_hip(
         controller: PenaltyController,
-        first_dof: str,
-        second_dof: str,
+        first_dof: int,
+        second_dof: int,
         key: str = "q",
 ) -> MX:
 
@@ -160,7 +160,7 @@ def prepare_ocp(
         max_time: float,
         total_mass: float,
         final_state_bound: bool,
-        coef_fig : int,
+        coef_FIG : int,
         weight_tau: float,
         weight_time: float = 1,
         use_sx: bool = False,
@@ -190,7 +190,7 @@ def prepare_ocp(
         The mass of the athlete
     final_state_bound : bool
         If the final state is with bound (false means it's with constraints)
-    coef_fig : int
+    coef_FIG : int
         Weighting coefficient for objectives that implement FIG code specifications
     weight_tau: float
         Weight for the torque minimization objective
@@ -265,7 +265,7 @@ def prepare_ocp(
         # FIG code specifications (knees, elbows and ankles flexion and thighs abduction)
         for name, w in weights.items():
             objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE,
-                key="q", phase=phase, index=idx[name],target=0, weight=w*coef_fig, )
+                                    key="q", phase=phase, index=idx[name], target=0, weight=w * coef_FIG, )
 
         dynamics.add(DynamicsOptions(
             expand_dynamics=expand_dynamics,
@@ -289,7 +289,7 @@ def prepare_ocp(
                             key="q", index=idx["HipAbdR"], phase=0,
                             target=0,#node=Node.ALL,
                             weight=ObjectiveWeight(weight_abd, interpolation=InterpolationType.EACH_FRAME))
-    objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE, key="q", index=idx["HipAbdR"], target=0, weight=6*coef_fig, phase=2)
+    objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE, key="q", index=idx["HipAbdR"], target=0, weight=6 * coef_FIG, phase=2)
 
     # impose the orientation of the pelvic during the descent phase
     constraint_list.add(ConstraintFcn.TRACK_MARKERS,
@@ -421,9 +421,9 @@ def main():
 
         # initial solution
         ocp = prepare_ocp(biorbd_model_path=CURRENT_DIR + filename, final_time=(1, 0.5, 1),
-                          n_shooting=n_shooting, min_time=0.2, max_time=2, coef_fig=weight_fig, total_mass=masse,
+                          n_shooting=n_shooting, min_time=0.2, max_time=2, coef_FIG=weight_fig, total_mass=masse,
                           weight_tau=weight_tau, weight_time=weight_time,
-                          final_state_bound=True, n_threads=os.cpu_count()-1,   use_sx=use_sx)
+                          final_state_bound=True, n_threads=os.cpu_count()-1, use_sx=use_sx)
         #todo compare final_state_bound=True vs False ... False should be faster
 
         ocp.add_plot_penalty(CostType.ALL)  # This will display the objectives and constraints at the current iteration
