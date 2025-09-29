@@ -381,7 +381,7 @@ def prepare_ocp(
 def main():
 
     CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-    RESULTS_DIR = os.path.join(CURRENT_DIR, "applied_examples/results3")
+    RESULTS_DIR = os.path.join(CURRENT_DIR, "applied_examples/results4")
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     n_shooting = (25, 25, 55)

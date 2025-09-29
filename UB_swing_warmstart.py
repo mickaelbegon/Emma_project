@@ -268,6 +268,8 @@ def prepare_ocp(
                                 key="q", phase=phase, node=Node.ALL,
                                 first_dof=idx[dof1], second_dof=idx[dof2], coef=coef)
 
+        #constraint_list.add(ConstraintFcn.CUSTOM)
+
 
     objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE,
                             key="q", index=idx["HipAbdR"], phase=0,
