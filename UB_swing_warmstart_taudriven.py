@@ -37,6 +37,7 @@ from bioptim import (
     ObjectiveWeight,
     DefectType,
     OrderingStrategy,
+    PenaltyController,
 )
 
 from bioptim.limits.path_conditions import PathCondition
@@ -112,6 +113,15 @@ class DynamicModel(TorqueBiorbdModel):
         return DynamicsEvaluation(dxdt=vertcat(qdot, qddot), defects=defects)
 
 
+
+def constraint_synergy_back_hip(
+        controller: PenaltyController,
+        first_dof: str,
+        second_dof: str,
+        key: str = "q",
+) -> MX:
+
+    return controller.states[key].cx[first_dof] * controller.states[key].cx[second_dof]
 def save_sol_states_controls(sol, filename):
     parts_s = sol.decision_states(to_merge=[SolutionMerge.NODES])
     qs = np.hstack([p["q"] for p in parts_s])
@@ -269,6 +279,11 @@ def prepare_ocp(
             constraint_list.add(ConstraintFcn.PROPORTIONAL_STATE,
                                 key="q", phase=phase, node=Node.ALL,
                                 first_dof=idx[dof1], second_dof=idx[dof2], coef=coef)
+
+        constraint_list.add(constraint_synergy_back_hip,
+                                key="q", phase=phase, node=Node.ALL,
+                                first_dof=idx["Back"], second_dof=idx["HipFlexR"],
+                                min_bound=0, max_bound=np.inf)
 
 
     objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE,
