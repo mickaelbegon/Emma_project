@@ -34,6 +34,7 @@ from bioptim import (
     TorqueDerivativeBiorbdModel,
     ObjectiveWeight,
     DefectType,
+    OrderingStrategy,
 )
 
 from bioptim.limits.path_conditions import PathCondition
@@ -121,10 +122,16 @@ def save_sol_states_controls(sol, filename):
     taudots = np.hstack([p["taudot"] for p in sol.decision_controls(to_merge=[SolutionMerge.NODES])])
     time = sol.stepwise_time(to_merge=[SolutionMerge.NODES, SolutionMerge.PHASES]).T[0]
 
+    iter = sol.iterations
+    conv = sol.real_time_to_optimize
+    cost = sol.cost
+
     # # --- Save the solution --- #
 
     with open(filename + ".pkl", "wb") as file:
-        data = {"q": qs, "qdot": qdots, "tau": taus, "taudot": taudots, "time": time, "convergence": sol.real_time_to_optimize}
+        data = {"q": qs, "qdot": qdots, "tau": taus, "taudot": taudots, "time": time,
+                "convergence": conv,  "cost": cost, "iter": iter,
+                } ,
         pickle.dump(data, file)
     print("states and controls saved:" + filename)
 
@@ -214,7 +221,7 @@ def prepare_ocp(
 
     # Index of useful degrees of freedom
     names = ["TxHands", "TzHands", "RyHands",
-             "Elbow", "Shoulder", "Back", "Neck",
+             "Elbow", "Shoulder", "Back", #"Neck",
              "HipAbdR", "HipFlexR", "KneeR", "AnkleR",
              "HipAbdL", "HipFlexL", "KneeL", "AnkleL"]
     idx = {name: int(i) for i, name in enumerate(names) if name}
@@ -236,8 +243,6 @@ def prepare_ocp(
     objective_functions = ObjectiveList()
     dynamics = DynamicsOptionsList()
     constraint_list = ConstraintList()
-
-
 
     for phase in range(3):
 #        objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", quadratic=True, weight=weight_tau, phase=phase)
@@ -270,8 +275,6 @@ def prepare_ocp(
                             weight=ObjectiveWeight(weight_abd, interpolation=InterpolationType.EACH_FRAME))
     objective_functions.add(ObjectiveFcn.Lagrange.TRACK_STATE, key="q", index=idx["HipAbdR"], target=0, weight=6*coef_fig, phase=2)
 
-
-
     # impose the orientation of the pelvic during the descent phase
     constraint_list.add(ConstraintFcn.TRACK_MARKERS,
                         list_index=22,
@@ -293,12 +296,9 @@ def prepare_ocp(
                         min_bound=-1234, # if init_sol else 0.02,
                         max_bound=np.inf, axes=Axis.X, )
 
-
-
-
     # BOUNDS
     rot_start =  -2 * np.pi / 45 # hands tilted by 8° at the start
-    rot_end = -2 * np.pi   # ends with hands 360° rotated
+    rot_end = rot_start - 2 * np.pi  # ends with hands 360° rotated
 
     x_bounds = BoundsList()
     for phase in range(3):
@@ -334,13 +334,15 @@ def prepare_ocp(
     u_max[idx["HipFlexR"]] = 9.36 * total_mass
     u_max[idx["HipFlexR"]] = 9.36 * total_mass
 
+    for phase in range(3):
+        x_bounds.add("tau", min_bound=u_min, max_bound=u_max, phase=phase)
+
+
     u_bounds = BoundsList()
     # for phase in range(3):
     #     u_bounds.add("tau", min_bound=u_min, max_bound=u_max, phase=phase)
 
 
-    for phase in range(3):
-        x_bounds.add("tau", min_bound=u_min, max_bound=u_max, phase=phase)
 
     if x_init is None:
         rotations = [rot_start, -np.pi / 4, -np.pi, -2 * np.pi]
@@ -376,16 +378,17 @@ def prepare_ocp(
         n_threads=n_threads,
         control_type=control_type,
         constraints=constraint_list,
+        ordering_strategy=OrderingStrategy.TIME_MAJOR,
     )
 
 
 def main():
 
     CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-    RESULTS_DIR = os.path.join(CURRENT_DIR, "applied_examples/results2")
+    RESULTS_DIR = os.path.join(CURRENT_DIR, "applied_examples/results3")
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    n_shooting = (25, 25, 50)
+    n_shooting = (25, 25, 55)
     weight_time = 10
     weight_fig = 1000
     use_sx = True
@@ -412,6 +415,7 @@ def main():
 
         # --- Solver options --- #
         solver = Solver.IPOPT()#show_online_optim=True
+        #solver = Solver.FATROP()
         solver.set_linear_solver("ma57")
         solver.set_maximum_iterations(5000)
         solver.set_bound_frac(1e-8)
@@ -450,6 +454,9 @@ def main():
         print("solve retro solution")
         sol2 = ocp.solve(solver, warm_start=sol0)
         save_sol_states_controls(sol2, os.path.join(RESULTS_DIR, f"athlete{num}_{mode}"))
+
+        time1 = time.perf_counter()
+        print(time1-time0)
 
 if __name__ == "__main__":
     main()
